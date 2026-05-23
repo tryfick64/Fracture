@@ -1,0 +1,153 @@
+/* ── Лобби ─────────────────────────────────────────────────────────────── */
+.lobby {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at 30% 20%, #1a1a2e 0%, #0a0a14 100%);
+  z-index: 9999;
+}
+
+.lobby__card {
+  background: #14141f;
+  border: 1px solid #2a2a3a;
+  border-radius: 14px;
+  padding: 40px 36px;
+  width: 360px;
+  box-shadow: 0 10px 60px rgba(0, 0, 0, 0.6);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.lobby__title {
+  margin: 0 0 4px;
+  text-align: center;
+  letter-spacing: 0.2em;
+}
+
+.lobby__subtitle {
+  margin: 0 0 18px;
+  text-align: center;
+  color: #8a8aa0;
+  font-size: 13px;
+}
+
+.lobby__btn {
+  width: 100%;
+  padding: 12px 18px;
+  font-size: 15px;
+}
+
+.lobby__btn--solo {
+  margin-top: 4px;
+  font-size: 13px;
+}
+
+.lobby__divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #555;
+  font-size: 12px;
+  margin: 6px 0;
+}
+.lobby__divider::before,
+.lobby__divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: #2a2a3a;
+}
+
+.lobby__join {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lobby__input {
+  width: 100%;
+  padding: 12px 14px;
+  background: #0c0c14;
+  border: 1px solid #2a2a3a;
+  border-radius: 8px;
+  color: #fff;
+  font-size: 18px;
+  font-family: monospace;
+  letter-spacing: 0.25em;
+  text-align: center;
+  text-transform: uppercase;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.lobby__input:focus {
+  border-color: #4a8aff;
+}
+
+.lobby__error {
+  color: #ff6b6b;
+  font-size: 13px;
+  text-align: center;
+}
+
+/* ── Бейдж комнаты ─────────────────────────────────────────────────────── */
+.room-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: #1a1a2e;
+  border: 1px solid #3a3a4a;
+  border-radius: 6px;
+  font-family: monospace;
+  font-size: 14px;
+  letter-spacing: 0.15em;
+  cursor: pointer;
+  user-select: none;
+  position: relative;
+}
+.room-badge small {
+  font-size: 11px;
+  color: #8a8aa0;
+  letter-spacing: normal;
+  font-family: sans-serif;
+}
+.room-badge--ok {
+  border-color: #4a9d6f;
+}
+.room-badge--wait {
+  border-color: #b58a3a;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+.room-badge__copied {
+  position: absolute;
+  top: -22px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #4a9d6f;
+  color: #fff;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-style: normal;
+  font-family: sans-serif;
+  white-space: nowrap;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+/* ── Базовые элементы (на случай если их нет в основном CSS) ───────────── */
+.btn--primary {
+  background: linear-gradient(135deg, #4a8aff 0%, #6b5cff 100%);
+  color: #fff;
+  border: none;
+  font-weight: 600;
+}
+.btn--primary:hover {
+  filter: brightness(1.1);
+}

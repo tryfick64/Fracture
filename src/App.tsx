@@ -1,10 +1,13 @@
-import React, { useState, useRef, useCallback, useEffect } from "react";
+import React, { useState, useRef, useCallback, useEffect, useMemo } from "react";
+
 import {
   type GameCard,
   buildDeck,
   FACTION_COLORS,
   TYPE_COLORS,
 } from "./cardData";
+
+import { useRoom, generateRoomKey } from "./lib/realtime.ts";
 
 const CARD_W = 140;
 const CARD_H = 190;
@@ -30,13 +33,15 @@ interface DamageToken {
   type: "damage" | "infection";
 }
 
-interface SaveState {
+interface GameState {
   cards: GameCard[];
   tokens: DamageToken[];
   maxZ: number;
   turnCount: number;
   nextTokenId: number;
 }
+
+interface SaveState extends GameState {}
 
 function getInitialCards(): GameCard[] {
   const deck = buildDeck();
@@ -51,7 +56,7 @@ function getInitialCards(): GameCard[] {
   }));
 }
 
-function loadSave(): SaveState | null {
+function loadLocalSave(): SaveState | null {
   try {
     const raw = localStorage.getItem("fracture-save");
     if (!raw) return null;
@@ -61,19 +66,82 @@ function loadSave(): SaveState | null {
   }
 }
 
+// ── Экран лобби ──────────────────────────────────────────────────────────────
+function Lobby({
+  onCreate,
+  onJoin,
+  onSolo,
+}: {
+  onCreate: () => void;
+  onJoin: (key: string) => void;
+  onSolo: () => void;
+}) {
+  const [keyInput, setKeyInput] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  const tryJoin = () => {
+    const k = keyInput.trim().toUpperCase();
+    if (k.length < 4) {
+      setError("Введите ключ комнаты (минимум 4 символа)");
+      return;
+    }
+    setError(null);
+    onJoin(k);
+  };
+
+  return (
+    <div className="lobby">
+      <div className="lobby__card">
+        <h1 className="fracture-title lobby__title">FRACTURE</h1>
+        <p className="lobby__subtitle">Онлайн-партия для двух игроков</p>
+
+        <button className="btn btn--primary lobby__btn" onClick={onCreate}>
+          🆕 Создать комнату
+        </button>
+
+        <div className="lobby__divider">
+          <span>или</span>
+        </div>
+
+        <div className="lobby__join">
+          <input
+            className="lobby__input"
+            type="text"
+            placeholder="КЛЮЧ КОМНАТЫ"
+            value={keyInput}
+            onChange={(e) => setKeyInput(e.target.value.toUpperCase())}
+            onKeyDown={(e) => e.key === "Enter" && tryJoin()}
+            maxLength={12}
+            autoFocus
+          />
+          <button className="btn lobby__btn" onClick={tryJoin}>
+            Войти по ключу
+          </button>
+        </div>
+
+        {error && <div className="lobby__error">{error}</div>}
+
+        <button className="btn btn--muted lobby__btn lobby__btn--solo" onClick={onSolo}>
+          Играть локально (без сети)
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Главный компонент ────────────────────────────────────────────────────────
 export default function App() {
-  // Загрузка сохранения один раз при старте
-  const [initialSave] = useState<SaveState | null>(loadSave);
+  // null = лобби, "SOLO" = локальная игра без сети, иначе — ключ комнаты
+  const [roomKey, setRoomKey] = useState<string | null>(null);
+  const [showCopied, setShowCopied] = useState(false);
+
+  const initialSave = useMemo(() => loadLocalSave(), []);
 
   const [cards, setCards] = useState<GameCard[]>(
     () => initialSave?.cards ?? getInitialCards()
   );
-  const [maxZ, setMaxZ] = useState(
-    () => initialSave?.maxZ ?? 100
-  );
-  const [turnCount, setTurnCount] = useState(
-    () => initialSave?.turnCount ?? 0
-  );
+  const [maxZ, setMaxZ] = useState(() => initialSave?.maxZ ?? 100);
+  const [turnCount, setTurnCount] = useState(() => initialSave?.turnCount ?? 0);
   const [tokens, setTokens] = useState<DamageToken[]>(
     () => initialSave?.tokens ?? []
   );
@@ -81,22 +149,75 @@ export default function App() {
     () => initialSave?.nextTokenId ?? 0
   );
 
-  // Автосохранение при любом изменении
+  // Текущее «слепленное» состояние для отправки в комнату
+  const liveState: GameState = useMemo(
+    () => ({ cards, tokens, maxZ, turnCount, nextTokenId }),
+    [cards, tokens, maxZ, turnCount, nextTokenId]
+  );
+
+  // Применить состояние, пришедшее от другого игрока
+  const applyRemote = useCallback((s: GameState) => {
+    setCards(s.cards);
+    setTokens(s.tokens);
+    setMaxZ(s.maxZ);
+    setTurnCount(s.turnCount);
+    setNextTokenId(s.nextTokenId);
+  }, []);
+
+  const inOnlineRoom = roomKey !== null && roomKey !== "SOLO";
+
+  const { connected, peerCount } = useRoom<GameState>({
+    roomKey: inOnlineRoom ? roomKey : null,
+    state: liveState,
+    applyRemoteState: applyRemote,
+    throttleMs: 40,
+  });
+
+  // Автосохранение в localStorage только для SOLO-режима
   useEffect(() => {
+    if (roomKey !== "SOLO") return;
     try {
-      const state: SaveState = {
-        cards,
-        tokens,
-        maxZ,
-        turnCount,
-        nextTokenId,
-      };
+      const state: SaveState = { cards, tokens, maxZ, turnCount, nextTokenId };
       localStorage.setItem("fracture-save", JSON.stringify(state));
     } catch (e) {
       console.warn("Failed to save:", e);
     }
-  }, [cards, tokens, maxZ, turnCount, nextTokenId]);
+  }, [cards, tokens, maxZ, turnCount, nextTokenId, roomKey]);
 
+  // ── Действия лобби ────────────────────────────────────────────────────────
+  const handleCreateRoom = useCallback(() => {
+    const key = generateRoomKey(6);
+    // Создатель стартует со свежей игрой
+    setCards(getInitialCards());
+    setTokens([]);
+    setMaxZ(100);
+    setTurnCount(0);
+    setNextTokenId(0);
+    setRoomKey(key);
+  }, []);
+
+  const handleJoinRoom = useCallback((key: string) => {
+    // При входе ждём, пока хозяин пришлёт состояние через sync-request.
+    setRoomKey(key);
+  }, []);
+
+  const handleSolo = useCallback(() => {
+    setRoomKey("SOLO");
+  }, []);
+
+  const handleLeaveRoom = useCallback(() => {
+    setRoomKey(null);
+  }, []);
+
+  const copyKey = useCallback(() => {
+    if (!inOnlineRoom || !roomKey) return;
+    void navigator.clipboard.writeText(roomKey).then(() => {
+      setShowCopied(true);
+      setTimeout(() => setShowCopied(false), 1500);
+    });
+  }, [inOnlineRoom, roomKey]);
+
+  // ── Рефы для drag ─────────────────────────────────────────────────────────
   const dragging = useRef<{
     type: "card" | "token";
     id: number;
@@ -106,7 +227,7 @@ export default function App() {
 
   const boardRef = useRef<HTMLDivElement>(null);
 
-  // ── Раздать базар ──
+  // ── Раздать базар ─────────────────────────────────────────────────────────
   const dealBazaar = useCallback(() => {
     setCards((prev) => {
       let current = [...prev];
@@ -166,10 +287,8 @@ export default function App() {
       return current.map((c) => {
         const idx = toDeal.findIndex((d) => d.id === c.id);
         if (idx === -1) return c;
-
         const col = idx % cols;
         const row = Math.floor(idx / cols);
-
         return {
           ...c,
           x: bazaarX + col * gapX,
@@ -183,17 +302,17 @@ export default function App() {
     setTurnCount((t) => t + 1);
   }, [maxZ]);
 
-  // ── Новая игра ──
+  // ── Новая игра ────────────────────────────────────────────────────────────
   const restart = useCallback(() => {
-    localStorage.removeItem("fracture-save");
+    if (roomKey === "SOLO") localStorage.removeItem("fracture-save");
     setCards(getInitialCards());
     setMaxZ(100);
     setTokens([]);
     setNextTokenId(0);
     setTurnCount(0);
-  }, []);
+  }, [roomKey]);
 
-  // ── Сброс в колоду ──
+  // ── Сброс в колоду ────────────────────────────────────────────────────────
   const shuffleDiscardToDeck = useCallback(() => {
     setCards((prev) => {
       const discardCards = prev.filter(
@@ -204,7 +323,6 @@ export default function App() {
           c.y <= DISCARD_Y + 210 &&
           c.stackedUnder === null
       );
-
       if (discardCards.length === 0) return prev;
 
       const discardIds = new Set(discardCards.map((c) => c.id));
@@ -226,19 +344,18 @@ export default function App() {
     });
   }, []);
 
-  // ── Перевернуть карту ──
+  // ── Перевернуть карту ─────────────────────────────────────────────────────
   const handleCardDoubleClick = useCallback((id: number) => {
     setCards((prev) =>
       prev.map((c) => (c.id === id ? { ...c, faceDown: !c.faceDown } : c))
     );
   }, []);
 
-  // ── Создать токен урона ──
+  // ── Создать токен урона ───────────────────────────────────────────────────
   const spawnToken = useCallback(
     (e: React.MouseEvent) => {
       e.preventDefault();
       e.stopPropagation();
-
       const newZ = TOKEN_BASE_Z + nextTokenId;
       const token: DamageToken = {
         id: nextTokenId,
@@ -247,10 +364,8 @@ export default function App() {
         zIndex: newZ,
         type: "damage",
       };
-
       setTokens((prev) => [...prev, token]);
       setNextTokenId((id) => id + 1);
-
       dragging.current = {
         type: "token",
         id: token.id,
@@ -261,12 +376,11 @@ export default function App() {
     [nextTokenId]
   );
 
-  // ── Создать токен инфекции ──
+  // ── Создать токен инфекции ────────────────────────────────────────────────
   const spawnInfectionToken = useCallback(
     (e: React.MouseEvent) => {
       e.preventDefault();
       e.stopPropagation();
-
       const newZ = TOKEN_BASE_Z + nextTokenId;
       const token: DamageToken = {
         id: nextTokenId,
@@ -275,10 +389,8 @@ export default function App() {
         zIndex: newZ,
         type: "infection",
       };
-
       setTokens((prev) => [...prev, token]);
       setNextTokenId((id) => id + 1);
-
       dragging.current = {
         type: "token",
         id: token.id,
@@ -289,7 +401,7 @@ export default function App() {
     [nextTokenId]
   );
 
-  // ── Начало перетаскивания карты ──
+  // ── Начало перетаскивания карты ───────────────────────────────────────────
   const handleCardMouseDown = useCallback(
     (e: React.MouseEvent, id: number) => {
       e.preventDefault();
@@ -298,7 +410,7 @@ export default function App() {
       const card = cards.find((c) => c.id === id);
       if (!card) return;
 
-      // Карта под другим каркасом — отсоединяем и тащим
+      // Карта под другим каркасом — отсоединяем
       if (card.stackedUnder !== null) {
         setCards((prev) =>
           prev.map((c) => {
@@ -308,13 +420,11 @@ export default function App() {
             return c;
           })
         );
-
         const newZ = maxZ + 1;
         setMaxZ(newZ);
         setCards((prev) =>
           prev.map((c) => (c.id === id ? { ...c, zIndex: newZ } : c))
         );
-
         dragging.current = {
           type: "card",
           id,
@@ -333,11 +443,9 @@ export default function App() {
           (best, c) => (c.id > best.id ? c : best),
           children[0]
         );
-
         if (lastChild) {
           const newZ = maxZ + 1;
           setMaxZ(newZ);
-
           setCards((prev) =>
             prev.map((c) => {
               if (c.id === lastChild.id) {
@@ -350,15 +458,11 @@ export default function App() {
                 };
               }
               if (c.id === id) {
-                return {
-                  ...c,
-                  stackCount: Math.max(0, c.stackCount - 1),
-                };
+                return { ...c, stackCount: Math.max(0, c.stackCount - 1) };
               }
               return c;
             })
           );
-
           dragging.current = {
             type: "card",
             id: lastChild.id,
@@ -375,7 +479,6 @@ export default function App() {
       setCards((prev) =>
         prev.map((c) => (c.id === id ? { ...c, zIndex: newZ } : c))
       );
-
       dragging.current = {
         type: "card",
         id,
@@ -386,20 +489,17 @@ export default function App() {
     [cards, maxZ]
   );
 
-  // ── Начало перетаскивания токена ──
+  // ── Начало перетаскивания токена ──────────────────────────────────────────
   const handleTokenMouseDown = useCallback(
     (e: React.MouseEvent, id: number) => {
       e.preventDefault();
       e.stopPropagation();
-
       const token = tokens.find((t) => t.id === id);
       if (!token) return;
-
       const newZ = TOKEN_BASE_Z + nextTokenId + 1;
       setTokens((prev) =>
         prev.map((t) => (t.id === id ? { ...t, zIndex: newZ } : t))
       );
-
       dragging.current = {
         type: "token",
         id,
@@ -410,13 +510,12 @@ export default function App() {
     [tokens, nextTokenId]
   );
 
-  // ── Перемещение ──
+  // ── Перемещение ───────────────────────────────────────────────────────────
   const handleMouseMove = useCallback((e: MouseEvent) => {
     if (!dragging.current) return;
     const { type, id, offsetX, offsetY } = dragging.current;
     const nx = e.clientX - offsetX;
     const ny = e.clientY - offsetY;
-
     if (type === "card") {
       setCards((prev) =>
         prev.map((c) => (c.id === id ? { ...c, x: nx, y: ny } : c))
@@ -428,7 +527,7 @@ export default function App() {
     }
   }, []);
 
-  // ── Отпускание ──
+  // ── Отпускание ────────────────────────────────────────────────────────────
   const handleMouseUp = useCallback(() => {
     if (!dragging.current) return;
     const { type, id } = dragging.current;
@@ -439,7 +538,6 @@ export default function App() {
         const dragCard = prev.find((c) => c.id === id);
         if (!dragCard) return prev;
 
-        // Попадание в сброс
         const inDiscard =
           dragCard.x >= DISCARD_X - 40 &&
           dragCard.x <= DISCARD_X + 180 &&
@@ -463,7 +561,6 @@ export default function App() {
           });
         }
 
-        // Стыковка каркасов
         let bestTarget: GameCard | null = null;
         let bestDist = STACK_THRESHOLD;
 
@@ -509,7 +606,7 @@ export default function App() {
     }
   }, []);
 
-  // ── Удалить токен правым кликом ──
+  // ── Удалить токен правым кликом ───────────────────────────────────────────
   const handleTokenRightClick = useCallback(
     (e: React.MouseEvent, id: number) => {
       e.preventDefault();
@@ -519,7 +616,7 @@ export default function App() {
     []
   );
 
-  // ── Глобальные обработчики мыши ──
+  // ── Глобальные обработчики мыши ───────────────────────────────────────────
   useEffect(() => {
     window.addEventListener("mousemove", handleMouseMove);
     window.addEventListener("mouseup", handleMouseUp);
@@ -529,7 +626,7 @@ export default function App() {
     };
   }, [handleMouseMove, handleMouseUp]);
 
-  // ── Подсчёты ──
+  // ── Подсчёты ──────────────────────────────────────────────────────────────
   const remaining = cards.filter(
     (c) =>
       c.x === DECK_X &&
@@ -547,6 +644,18 @@ export default function App() {
 
   const visibleCards = [...cards].sort((a, b) => a.zIndex - b.zIndex);
 
+  // ── Экран лобби ───────────────────────────────────────────────────────────
+  if (roomKey === null) {
+    return (
+      <Lobby
+        onCreate={handleCreateRoom}
+        onJoin={handleJoinRoom}
+        onSolo={handleSolo}
+      />
+    );
+  }
+
+  // ── Игровое поле ──────────────────────────────────────────────────────────
   return (
     <div className="fracture-app">
       <div className="controls">
@@ -559,6 +668,30 @@ export default function App() {
         </button>
         <span className="deck-counter">Колода: {remaining}</span>
         <span className="deck-counter">Ход: {turnCount}</span>
+
+        {inOnlineRoom && (
+          <>
+            <span
+              className={`room-badge ${connected ? "room-badge--ok" : "room-badge--wait"}`}
+              onClick={copyKey}
+              title="Скопировать ключ"
+            >
+              🔑 {roomKey}{" "}
+              <small>
+                {connected ? `(игроков: ${peerCount})` : "подключение…"}
+              </small>
+              {showCopied && <em className="room-badge__copied">скопировано!</em>}
+            </span>
+            <button className="btn btn--muted" onClick={handleLeaveRoom}>
+              Выйти из комнаты
+            </button>
+          </>
+        )}
+        {roomKey === "SOLO" && (
+          <button className="btn btn--muted" onClick={handleLeaveRoom}>
+            ← В лобби
+          </button>
+        )}
       </div>
 
       <div className="board" ref={boardRef}>
@@ -572,7 +705,6 @@ export default function App() {
           <div className="board__line board__line--p2front">
             <span className="line-label">Фронт (P2)</span>
           </div>
-          
           <div className="board__line board__line--p1front">
             <span className="line-label">Фронт (P1)</span>
           </div>
